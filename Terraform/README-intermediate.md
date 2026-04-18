@@ -2,7 +2,6 @@
 > **Prerequisites:** Level 1 complete + final assignment passed  
 > **Goal:** Build real team-grade infrastructure with modules, remote state, VPCs, and CI/CD  
 > **Time estimate:** 3–4 days  
-> **Tutor:** Senior DevOps Engineer (10 years experience)
 
 ---
 
