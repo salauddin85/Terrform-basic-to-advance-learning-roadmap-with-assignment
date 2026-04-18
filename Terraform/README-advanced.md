@@ -2,7 +2,6 @@
 > **Prerequisites:** Level 1 + Level 2 complete, both assignments passed  
 > **Goal:** Engineer production-grade Terraform at scale — secure, tested, observable, and enterprise-ready  
 > **Time estimate:** 4–5 days  
-> **Tutor:** Senior DevOps Engineer (10 years experience)
 
 ---
 
