@@ -2,7 +2,6 @@
 > **Audience:** DevOps intern with AWS Console experience  
 > **Goal:** Understand Terraform core concepts and provision real AWS infrastructure from code  
 > **Time estimate:** 2–3 days  
-> **Tutor:** Senior DevOps Engineer (10 years experience)
 
 ---
 
