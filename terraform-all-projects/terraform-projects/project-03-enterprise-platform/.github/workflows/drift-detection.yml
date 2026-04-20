@@ -1,0 +1,128 @@
+name: Drift Detection
+
+on:
+  schedule:
+    # Run at 07:00 UTC Monday–Friday
+    - cron: "0 7 * * 1-5"
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to check (dev / staging / prod)"
+        required: true
+        default: "prod"
+
+env:
+  TF_VERSION:         "1.7.0"
+  TERRAGRUNT_VERSION: "0.55.0"
+  AWS_REGION:         "us-east-1"
+
+permissions:
+  id-token:  write
+  contents:  read
+
+jobs:
+  detect-drift:
+    name: Detect Drift — ${{ github.event.inputs.environment || 'prod' }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'prod' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:    ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region:        ${{ env.AWS_REGION }}
+          role-session-name: drift-detection
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Setup Terragrunt
+        run: |
+          wget -q "https://github.com/gruntwork-io/terragrunt/releases/download/v${{ env.TERRAGRUNT_VERSION }}/terragrunt_linux_amd64"
+          chmod +x terragrunt_linux_amd64
+          sudo mv terragrunt_linux_amd64 /usr/local/bin/terragrunt
+
+      - name: Run drift detection
+        id: drift
+        # -detailed-exitcode: 0=no changes, 1=error, 2=drift detected
+        working-directory: environments/${{ github.event.inputs.environment || 'prod' }}
+        run: |
+          set +e
+          terragrunt run-all plan \
+            -refresh-only \
+            -detailed-exitcode \
+            --terragrunt-non-interactive \
+            --terragrunt-parallelism 4 \
+            2>&1 | tee drift_output.txt
+
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+
+          if [ $EXIT_CODE -eq 2 ]; then
+            echo "drift_detected=true" >> $GITHUB_OUTPUT
+            echo "DRIFT DETECTED in ${{ github.event.inputs.environment || 'prod' }}"
+          elif [ $EXIT_CODE -eq 0 ]; then
+            echo "drift_detected=false" >> $GITHUB_OUTPUT
+            echo "No drift detected."
+          else
+            echo "drift_detected=error" >> $GITHUB_OUTPUT
+            echo "Error running plan — check logs."
+          fi
+
+      - name: Alert on drift via Slack
+        if: steps.drift.outputs.drift_detected == 'true'
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "⚠️ *Terraform Drift Detected*",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": { "type": "plain_text", "text": "⚠️ Infrastructure Drift Detected" }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    { "type": "mrkdwn", "text": "*Environment:*\n${{ github.event.inputs.environment || 'prod' }}" },
+                    { "type": "mrkdwn", "text": "*Time:*\n${{ github.event.repository.updated_at }}" }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "Real infrastructure differs from Terraform state. Review and remediate.\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL:  ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Alert on error via Slack
+        if: steps.drift.outputs.drift_detected == 'error'
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "🔴 *Drift Detection Failed* — ${{ github.event.inputs.environment || 'prod' }}. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Logs>"
+            }
+        env:
+          SLACK_WEBHOOK_URL:  ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Upload drift report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report-${{ github.run_id }}
+          path: environments/${{ github.event.inputs.environment || 'prod' }}/drift_output.txt
+          retention-days: 30
